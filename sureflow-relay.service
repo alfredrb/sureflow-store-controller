@@ -1,0 +1,31 @@
+# sureflow-relay.service
+# Reference copy. The controller installer writes its own unit pointing at the path it
+# installed to; this is the hardened version to fall back on.
+#
+# StartLimitIntervalSec=0 is load-bearing: without it a process that crashes on startup
+# restarts five times in ten seconds, systemd parks the unit in 'failed', and the store
+# stays down until a human intervenes.
+[Unit]
+Description=SureFlow Local Relay
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sureflow
+WorkingDirectory=/srv/sureflow/relay
+EnvironmentFile=/srv/sureflow/relay/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+KillMode=mixed
+OOMPolicy=continue
+OOMScoreAdjust=-500
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sureflow-relay
+
+[Install]
+WantedBy=multi-user.target

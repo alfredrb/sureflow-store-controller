@@ -1,0 +1,7 @@
+node_modules/
+pos-dist/
+.env
+relay.db
+relay.db-wal
+relay.db-shm
+*.log
