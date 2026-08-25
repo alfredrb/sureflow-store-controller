@@ -7,6 +7,7 @@ const API_KEY   = process.env.CLOUD_API_KEY;    // per-store key from the Comman
 
 let online = false;
 let lastSyncAt = null;
+let pendingCommands = [];
 let consecutiveFailures = 0;
 let lastError = null;
 
@@ -26,10 +27,95 @@ async function callCloud(payload) {
   return data;
 }
 
-// Pull the catalog down and overwrite the local cache (cloud always wins).
+// ---- pushed status + queued commands (the cloud cannot reach into this LAN) ----
+// The portal is in the cloud and this relay usually sits on a private store network, so
+// nothing can open a connection inward. Instead the relay reports its own health UP on
+// each pass and collects any operation an admin queued, running it here on the box.
+const PORT = process.env.PORT || 3000;
+const RELAY_TOKEN = process.env.RELAY_ACCESS_TOKEN || "";
+
+async function localCall(path, method, body, timeoutMs) {
+  const res = await fetch("http://127.0.0.1:" + PORT + path, {
+    method: method || "GET",
+    headers: Object.assign(
+      { "Content-Type": "application/json" },
+      RELAY_TOKEN ? { "X-Relay-Token": RELAY_TOKEN } : {}
+    ),
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs || 15000),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+// The relay's own /status, exactly as the portal used to poll it. Reusing the route
+// means the pushed payload and the polled one can never drift apart.
+async function collectStatus() {
+  try {
+    return await localCall("/status", "GET", null, 8000);
+  } catch (e) {
+    console.error("[sync] could not read local /status:", e.message);
+    return null;
+  }
+}
+
+const COMMAND_ROUTES = {
+  reboot_vm:   { path: "/proxmox/reboot",  timeout: 10000 },
+  backup:      { path: "/ops/backup",      timeout: 180000 },
+  self_update: { path: "/ops/self-update", timeout: 180000 },
+  lane_reboot: { path: "/lane/reboot",     timeout: 15000 },
+  test_print:  { path: "/api/print-test",  timeout: 45000 },
+};
+
+async function runCommand(cmd) {
+  // force_sync IS this pass — by the time the command is in hand the catalog has been
+  // pulled and the outbox pushed, so there is nothing further to do.
+  if (cmd.command_type === "force_sync") return "Sync pass completed on the relay.";
+
+  const route = COMMAND_ROUTES[cmd.command_type];
+  if (!route) throw new Error("Unknown command type: " + cmd.command_type);
+
+  const body = Object.assign({}, cmd.payload || {}, cmd.register_id ? { register_id: cmd.register_id } : {});
+  const out = await localCall(route.path, "POST", body, route.timeout);
+  return out.output || out.message || "ok";
+}
+
+// A claimed command is always answered — completed or failed. Silence would leave it
+// stuck as 'claimed' in the portal with no way to tell what happened.
+// reboot_vm is acked as soon as the route accepts it, because the box goes down a
+// second later and there would be no process left to report from.
+async function drainCommands(list) {
+  for (const cmd of list || []) {
+    if (!cmd || !cmd.command_id) continue;
+    try {
+      const detail = await runCommand(cmd);
+      await callCloud({
+        action: "command_result",
+        command_id: cmd.command_id,
+        result: "completed",
+        detail: String(detail).slice(0, 900),
+      });
+      console.log("[sync] ran queued command " + cmd.command_type);
+    } catch (e) {
+      await callCloud({
+        action: "command_result",
+        command_id: cmd.command_id,
+        result: "failed",
+        detail: e.message,
+      }).catch(() => {});
+      console.error("[sync] queued command " + cmd.command_type + " failed:", e.message);
+    }
+  }
+}
+
+// Pull the catalog down and overwrite the local cache (cloud always wins). The same
+// call carries this store's status telemetry up and brings queued commands back.
 async function pullCatalog() {
-  const data = await callCloud({ action: "pull" });
+  const status = await collectStatus();
+  const data = await callCloud(status ? { action: "pull", status: status } : { action: "pull" });
   store.saveCatalog(data);
+  pendingCommands = data.pending_commands || [];
   return data.records_pulled || 0;
 }
 
@@ -53,6 +139,13 @@ async function syncOnce(opts) {
   try {
     if (!(opts && opts.pushOnly)) await pullCatalog();
     await pushSales();
+    // Commands run only after the catalog and outbox are settled, so an operation that
+    // reboots the box can never strand a queued sale.
+    if (pendingCommands.length) {
+      const batch = pendingCommands;
+      pendingCommands = [];
+      await drainCommands(batch);
+    }
     online = true;
     consecutiveFailures = 0;
     lastError = null;
