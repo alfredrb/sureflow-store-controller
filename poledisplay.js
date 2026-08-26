@@ -39,11 +39,26 @@ const PROFILES = {
   ibm_4610_2x20: null,
   toshiba_4820_2x20: null,
 
-  // Toshiba 2x20 pole on a USB (USB-serial) port. Transport is already solved:
-  // the lane's ser2net bridge publishes the pad as lane_ip:BRIDGE_PORT, so this
-  // profile writes to the LANE address, never the printer. Frames are the same
-  // IBM/ADX family as the chain poles, so it stays reserved until captured.
-  toshiba_usb_2x20: null,
+  // Toshiba TCx 2x20 pole (0f66:4524) on USB, driven through the Toshiba VSP
+  // driver on the lane: vsd turns the HID device into a virtual serial tty and
+  // the lane's ser2net bridge publishes that tty as lane_ip:BRIDGE_PORT, so this
+  // profile writes to the LANE address, never the printer.
+  //
+  // Command set is IBM/ADX (Logic Controls) per the vendor VSP guide, NOT
+  // ESC/POS: Reset 1F clears, homes and restores DC1 normal mode + CP437;
+  // Display Position 10 nn moves the cursor (00h top-left, 14h bottom-left);
+  // then plain ASCII fills each 20-column line.
+  toshiba_usb_2x20: {
+    port: BRIDGE_PORT,
+    bridge: true,
+    frame(lines) {
+      return (
+        "\x1f" +                            // Reset: clear + home, DC1, CP437
+        "\x10\x00" + pad(lines[0]) +        // Display Position 00h = top-left
+        "\x10\x14" + pad(lines[1])          // Display Position 14h = bottom-left
+      );
+    },
+  },
 
   // Logic Controls LD9900 (LCI command set over a serial-device server) —
   // reserved. Fill in its frame() before enabling the profile on lanes.
