@@ -39,26 +39,18 @@ const PROFILES = {
   ibm_4610_2x20: null,
   toshiba_4820_2x20: null,
 
-  // Toshiba TCx 2x20 pole (0f66:4524) on USB, driven through the Toshiba VSP
-  // driver on the lane: vsd turns the HID device into a virtual serial tty and
-  // the lane's ser2net bridge publishes that tty as lane_ip:BRIDGE_PORT, so this
-  // profile writes to the LANE address, never the printer.
+  // Toshiba TCx 2x20 pole (0f66:4524) on USB — RESERVED, proven not working.
   //
-  // Command set is IBM/ADX (Logic Controls) per the vendor VSP guide, NOT
-  // ESC/POS: Reset 1F clears, homes and restores DC1 normal mode + CP437;
-  // Display Position 10 nn moves the cursor (00h top-left, 14h bottom-left);
-  // then plain ASCII fills each 20-column line.
-  toshiba_usb_2x20: {
-    port: BRIDGE_PORT,
-    bridge: true,
-    frame(lines) {
-      return (
-        "\x1f" +                            // Reset: clear + home, DC1, CP437
-        "\x10\x00" + pad(lines[0]) +        // Display Position 00h = top-left
-        "\x10\x14" + pad(lines[1])          // Display Position 14h = bottom-left
-      );
-    },
-  },
+  // The Toshiba VSP driver was expected to translate this pole's proprietary HID
+  // framing into a serial stream. It does NOT: on a live lane vsd starts, logs
+  // nothing, and only creates PASSTHROUGH SYMLINKS onto the raw device
+  // (/dev/tgcsld0 -> hidraw0). Writing IBM/ADX frames to that node is identical
+  // to writing to /dev/hidraw0, which renders nothing.
+  //
+  // Reserved until the real USB HID protocol is captured from a live unit
+  // (deferred). Leaving this profile live silently sent frames to a node that
+  // never draws, so a lane read as configured while showing a dead display.
+  toshiba_usb_2x20: null,
 
   // Logic Controls LD9900 (LCI command set over a serial-device server) —
   // reserved. Fill in its frame() before enabling the profile on lanes.
