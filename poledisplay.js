@@ -39,18 +39,31 @@ const PROFILES = {
   ibm_4610_2x20: null,
   toshiba_4820_2x20: null,
 
-  // Toshiba TCx 2x20 pole (0f66:4524) on USB — RESERVED, proven not working.
+  // Toshiba TCx 2x20 pole (0f66:4524) on USB — PROVEN WORKING on a live lane.
   //
-  // The Toshiba VSP driver was expected to translate this pole's proprietary HID
-  // framing into a serial stream. It does NOT: on a live lane vsd starts, logs
-  // nothing, and only creates PASSTHROUGH SYMLINKS onto the raw device
-  // (/dev/tgcsld0 -> hidraw0). Writing IBM/ADX frames to that node is identical
-  // to writing to /dev/hidraw0, which renders nothing.
+  // The pole must be assigned to a port on the VSP config tool's Line Display tab
+  // (VID 0f66, PID 4524). vsd then owns a real pty and symlinks it as the chosen
+  // node (/dev/ttyS20 -> /dev/pts/N). Writing IBM/ADX frames to that node renders:
+  // Reset 1F clears and homes, Display Position 10 nn addresses the cursor
+  // (00 = line 1 col 1, 14 = line 2 col 1), then plain text. NOT ESC/POS.
   //
-  // Reserved until the real USB HID protocol is captured from a live unit
-  // (deferred). Leaving this profile live silently sent frames to a node that
-  // never draws, so a lane read as configured while showing a dead display.
-  toshiba_usb_2x20: null,
+  // An earlier lane failed because vsd had NOT been given the device on that tab,
+  // so it only produced a passthrough symlink onto hidraw and drew nothing. If a
+  // lane shows a dead pole, check the Line Display assignment before the frames.
+  //
+  // The lane's ser2net bridge publishes that tty at lane_ip:9101, so the relay
+  // writes it like a network pole — pole IP = the LANE's own LAN IP.
+  toshiba_usb_2x20: {
+    bridge: true,
+    port: BRIDGE_PORT,
+    frame(lines) {
+      return (
+        "\x1f" +                                // Reset — clear + cursor home
+        "\x10\x00" + pad(lines[0]) +            // Display Position line 1 col 1
+        "\x10\x14" + pad(lines[1])              // Display Position line 2 col 1
+      );
+    },
+  },
 
   // Logic Controls LD9900 (LCI command set over a serial-device server) —
   // reserved. Fill in its frame() before enabling the profile on lanes.

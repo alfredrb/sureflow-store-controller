@@ -18,6 +18,7 @@ const { printerTelemetry, recordHeartbeat, liveRegisters } = require("./telemetr
 const checkReader = require("./checkReader");   // check-reader-build 5 (two-pass endorsement)
 const pinpad = require("./pinpad");             // pinpad-build 1
 const pole = require("./poledisplay");          // pole-build 1
+const poleCapture = require("./polecapture");   // pole-capture-build 1 (IBM/ADX frame recorder)
 const { queueReboot, claimReboot, listPending } = require("./laneReboot"); // lane-reboot-build 2
 
 const app = express();
@@ -60,6 +61,7 @@ app.get("/status", async (req, res) => {
     check_reader: checkReader.BUILD,
     pinpad: pinpad.BUILD,
     pole: pole.BUILD,
+    pole_capture: "pole-capture-build 1",
     lane_reboot: "lane-reboot-build 2",
     vm_stats: vmStats(),
     printers,
@@ -141,6 +143,20 @@ for (const route of ["show", "idle"]) {
   });
 }
 
+// ───────────────────── POLE FRAME CAPTURE (technician use) ─────────────────────
+// Records the IBM/ADX byte frames a reserved pole profile needs, off a live unit
+// driven by a known-good controller. Take the lane out of service first — if the
+// relay is also writing display updates the capture records its own frames too.
+app.post("/api/pole/capture/start", (req, res) => {
+  try { res.json(poleCapture.start(req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get("/api/pole/capture/status", (req, res) => {
+  try { res.json(poleCapture.status(req.query.capture_id)); } catch (e) { res.status(404).json({ error: e.message }); }
+});
+app.post("/api/pole/capture/stop", (req, res) => {
+  try { res.json(poleCapture.stop(req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ───────────────────────── LANE REBOOT (claim side) ─────────────────────────
 // OPEN on purpose: the lane agent polling this has no relay token, and the route only
 // ever returns that lane's own flag, which is consumed on read.
@@ -211,7 +227,7 @@ process.on("uncaughtException", (e) => console.error("[relay] uncaught exception
 
 app.listen(PORT, () => {
   console.log("SureFlow relay (complete) for store " + process.env.STORE_ID + " on :" + PORT);
-  console.log(checkReader.BUILD + " | " + pinpad.BUILD + " | " + pole.BUILD + " | lane-reboot-build 2");
+  console.log(checkReader.BUILD + " | " + pinpad.BUILD + " | " + pole.BUILD + " | pole-capture-build 1 | lane-reboot-build 2");
   console.log("privileged routes " + (tokenConfigured() ? "secured with RELAY_ACCESS_TOKEN" : "OPEN — set RELAY_ACCESS_TOKEN"));
   startSync();
 });
